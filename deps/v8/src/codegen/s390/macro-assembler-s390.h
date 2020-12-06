@@ -17,6 +17,8 @@
 namespace v8 {
 namespace internal {
 
+enum class StackLimitKind { kInterruptStackLimit, kRealStackLimit };
+
 // ----------------------------------------------------------------------------
 // Static helper functions
 
@@ -128,6 +130,14 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
  public:
   using TurboAssemblerBase::TurboAssemblerBase;
 
+  void DoubleMax(DoubleRegister result_reg, DoubleRegister left_reg,
+                 DoubleRegister right_reg);
+  void DoubleMin(DoubleRegister result_reg, DoubleRegister left_reg,
+                 DoubleRegister right_reg);
+  void FloatMax(DoubleRegister result_reg, DoubleRegister left_reg,
+                DoubleRegister right_reg);
+  void FloatMin(DoubleRegister result_reg, DoubleRegister left_reg,
+                DoubleRegister right_reg);
   void LoadFromConstantsTable(Register destination,
                               int constant_index) override;
   void LoadRootRegisterOffset(Register destination, intptr_t offset) override;
@@ -153,8 +163,9 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   void Ret() { b(r14); }
   void Ret(Condition cond) { b(cond, r14); }
 
-  void CallForDeoptimization(Address target, int deopt_id, Label* exit,
-                             DeoptimizeKind kind);
+  void CallForDeoptimization(Builtins::Name target, int deopt_id, Label* exit,
+                             DeoptimizeKind kind, Label* ret,
+                             Label* jump_deoptimization_entry_label);
 
   // Emit code to discard a non-negative number of pointer-sized elements
   // from the stack, clobbering only the sp register.
@@ -393,16 +404,16 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   // Load 32bit
   void Load(Register dst, const MemOperand& opnd);
   void Load(Register dst, const Operand& opnd);
-  void LoadW(Register dst, const MemOperand& opnd, Register scratch = no_reg);
-  void LoadW(Register dst, Register src);
-  void LoadlW(Register dst, const MemOperand& opnd, Register scratch = no_reg);
-  void LoadlW(Register dst, Register src);
-  void LoadLogicalHalfWordP(Register dst, const MemOperand& opnd);
-  void LoadLogicalHalfWordP(Register dst, Register src);
-  void LoadB(Register dst, const MemOperand& opnd);
-  void LoadB(Register dst, Register src);
-  void LoadlB(Register dst, const MemOperand& opnd);
-  void LoadlB(Register dst, Register src);
+  void LoadS32(Register dst, const MemOperand& opnd, Register scratch = no_reg);
+  void LoadS32(Register dst, Register src);
+  void LoadU32(Register dst, const MemOperand& opnd, Register scratch = no_reg);
+  void LoadU32(Register dst, Register src);
+  void LoadU16(Register dst, const MemOperand& opnd);
+  void LoadU16(Register dst, Register src);
+  void LoadS8(Register dst, const MemOperand& opnd);
+  void LoadS8(Register dst, Register src);
+  void LoadU8(Register dst, const MemOperand& opnd);
+  void LoadU8(Register dst, Register src);
 
   void LoadLogicalReversedWordP(Register dst, const MemOperand& opnd);
   void LoadLogicalReversedHalfWordP(Register dst, const MemOperand& opnd);
@@ -416,8 +427,8 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   void LoadAndTestP(Register dst, const MemOperand& opnd);
 
   // Load Floating Point
-  void LoadDouble(DoubleRegister dst, const MemOperand& opnd);
-  void LoadFloat32(DoubleRegister dst, const MemOperand& opnd);
+  void LoadF64(DoubleRegister dst, const MemOperand& opnd);
+  void LoadF32(DoubleRegister dst, const MemOperand& opnd);
   void LoadFloat32ConvertToDouble(DoubleRegister dst, const MemOperand& mem);
   void LoadSimd128(Simd128Register dst, const MemOperand& mem,
                    Register scratch);
@@ -529,7 +540,7 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
   }
 
   void pop(DoubleRegister dst) {
-    LoadDouble(dst, MemOperand(sp));
+    LoadF64(dst, MemOperand(sp));
     la(sp, MemOperand(sp, kSystemPointerSize));
   }
 
@@ -757,9 +768,9 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
 
   void StoreW(Register src, const MemOperand& mem, Register scratch = no_reg);
 
-  void LoadHalfWordP(Register dst, Register src);
+  void LoadS16(Register dst, Register src);
 
-  void LoadHalfWordP(Register dst, const MemOperand& mem,
+  void LoadS16(Register dst, const MemOperand& mem,
                      Register scratch = no_reg);
 
   void StoreHalfWord(Register src, const MemOperand& mem,
@@ -968,7 +979,7 @@ class V8_EXPORT_PRIVATE TurboAssembler : public TurboAssemblerBase {
     } else if (is_int20(value.offset())) {
       tmy(value, Operand(1));
     } else {
-      LoadB(r0, value);
+      LoadS8(r0, value);
       tmll(r0, Operand(1));
     }
   }
@@ -1072,21 +1083,11 @@ class V8_EXPORT_PRIVATE MacroAssembler : public TurboAssembler {
   // TODO(victorgomes): Remove this function once we stick with the reversed
   // arguments order.
   void LoadReceiver(Register dest, Register argc) {
-#ifdef V8_REVERSE_JSARGS
     LoadP(dest, MemOperand(sp, 0));
-#else
-    ShiftLeftP(dest, argc, Operand(kSystemPointerSizeLog2));
-    LoadP(dest, MemOperand(sp, dest));
-#endif
   }
 
   void StoreReceiver(Register rec, Register argc, Register scratch) {
-#ifdef V8_REVERSE_JSARGS
     StoreP(rec, MemOperand(sp, 0));
-#else
-    ShiftLeftP(scratch, argc, Operand(kSystemPointerSizeLog2));
-    StoreP(rec, MemOperand(sp, scratch));
-#endif
   }
 
   void CallRuntime(const Runtime::Function* f, int num_arguments,
@@ -1183,6 +1184,14 @@ class V8_EXPORT_PRIVATE MacroAssembler : public TurboAssembler {
                         Register scratch2);
   void DecrementCounter(StatsCounter* counter, int value, Register scratch1,
                         Register scratch2);
+
+  // ---------------------------------------------------------------------------
+  // Stack limit utilities
+
+  MemOperand StackLimitAsMemOperand(StackLimitKind kind);
+  void StackOverflowCheck(Register num_args, Register scratch,
+                          Label* stack_overflow);
+
   // ---------------------------------------------------------------------------
   // JavaScript invokes
 
